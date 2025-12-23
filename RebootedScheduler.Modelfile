@@ -125,38 +125,46 @@ SCHEDULING RULES:
 - Use a topological ordering of tasks based on their dependencies.
 - If a dependency chain is too long to fit into the horizon, schedule as many tasks as possible in the correct order and mark the remaining tasks as unassigned.
 
-2) Respect daily focus capacity and session limits
+2) STRICTLY respect availability windows
+- You MUST ONLY schedule tasks within the time blocks specified in "availability.daily_time_blocks".
+- For each day, find the matching entry in "daily_time_blocks" that has the same "date" and "weekday".
+- Each scheduled block's "start" and "end" times MUST fall completely within one of the availability blocks for that day.
+- NEVER schedule a task outside the availability windows (e.g., if availability is 09:00-10:00, do NOT schedule at 00:00-01:30).
+- If a task cannot fit within any availability window, mark it as "unassigned_tasks" with a reason.
+- Do not create placeholder blocks or fill empty availability slots with dummy tasks.
+
+3) Respect daily focus capacity and session limits
 - For each day, "planned_focus_minutes" must not exceed user_preferences.daily_focus_capacity_minutes.
 - Each single block duration must be between user_preferences.min_focus_minutes and user_preferences.max_focus_minutes.
 - If the user's available time in a given day (sum of blocks in availability) is less than daily_focus_capacity_minutes, you are limited by the available time.
 - Do not create micro blocks smaller than min_focus_minutes.
 
-3) Use deep-focus vs non-deep-focus blocks
+4) Use deep-focus vs non-deep-focus blocks
 - If a time block in availability has is_deep_focus = true, it is best for hard or high procrastination tasks.
 - If is_deep_focus = false, it is better for lighter tasks, review tasks, or short administrative work.
 - Try to place tasks with higher difficulty and higher procrastination_risk into deep-focus blocks, especially at the beginning of the day.
 
-4) Use priorities
+5) Use priorities
 - Use user_preferences.priority_order together with difficulty, procrastination_risk and any implicit urgency to decide which pending tasks should be scheduled earlier in the horizon.
 - When there is not enough time to schedule all tasks, prioritize the most important and most urgent tasks.
 - If there is a clear project title or implicit deadline in tasks_graph, use that to avoid leaving critical tasks unassigned.
 
-5) Use adjusted_estimated_minutes
+6) Use adjusted_estimated_minutes
 - Use tasks_graph.tasks[i].adjusted_estimated_minutes as the main estimate for each task.
 - If a task does not fit fully into a single block, you may split it across multiple blocks on the same day or on consecutive days.
 - When splitting, use the same task_id (task_model_id) for all related blocks.
 
-6) Avoid overload and support anti-procrastination
+7) Avoid overload and support anti-procrastination
 - Do not pack all heavy tasks into a single day.
 - Respect user_preferences.max_deep_tasks_per_day: no more than that number of high difficulty or high procrastination_risk tasks in deep-focus blocks each day.
 - Mix harder tasks with lighter tasks when possible, for example: deep task → lighter task → break or lighter task.
 
-7) Handling insufficient time
+8) Handling insufficient time
 - If there is not enough time in the selected horizon to schedule all pending tasks:
   - Put unscheduled tasks into the "unassigned_tasks" array.
   - Explain in the "reason" whether it is because of limited time, lower priority, or because too many prerequisite tasks had to be scheduled first.
 
-8) Language and robustness
+9) Language and robustness
 - Always set "language" to "en".
 - Match the user's preferences for morning/afternoon/evening when choosing which day blocks to use for harder tasks.
 - If there are no tasks, return days as an empty array and unassigned_tasks as an empty array.

@@ -298,6 +298,7 @@ async function getUserAvailabilityTemplate(userId) {
 
 // Build availability JSON for scheduler from weekly template
 function buildAvailability(startDate, horizonDays, templateRows) {
+  // Create a map of weekday -> availability blocks
   const byWeekday = {};
 
   for (const row of templateRows) {
@@ -314,12 +315,29 @@ function buildAvailability(startDate, horizonDays, templateRows) {
     });
   }
 
-  const daily_time_blocks = Object.entries(byWeekday).map(
-    ([weekday, blocks]) => ({
-      weekday,
-      blocks
-    })
-  );
+  // Generate date-specific availability for each day in the horizon
+  const daily_time_blocks = [];
+  const start = new Date(startDate);
+  const weekdayNames = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+
+  for (let i = 0; i < horizonDays; i++) {
+    const currentDate = new Date(start);
+    currentDate.setDate(start.getDate() + i);
+    
+    const dateStr = currentDate.toISOString().split('T')[0]; // YYYY-MM-DD
+    const weekday = weekdayNames[currentDate.getDay()];
+    
+    // Get availability blocks for this weekday
+    const blocks = byWeekday[weekday] || [];
+    
+    if (blocks.length > 0) {
+      daily_time_blocks.push({
+        date: dateStr,
+        weekday: weekday,
+        blocks: blocks
+      });
+    }
+  }
 
   return {
     start_date: startDate,
@@ -438,6 +456,13 @@ async function saveScheduleToSupabase(schedulePlan, projectId, userId) {
     const weekday = day.weekday;
 
     for (const b of day.blocks ?? []) {
+      // Only save blocks that have a valid task_model_id
+      // Skip placeholder blocks or blocks without tasks
+      if (!b.task_id || b.task_id.trim() === '') {
+        console.warn(`Skipping schedule block without task_id on ${date} ${b.start}-${b.end}`);
+        continue;
+      }
+
       blockRows.push({
         schedule_id: scheduleId,
         user_id: userId,
@@ -620,6 +645,159 @@ app.post("/decompose", getUserIdFromToken, async (req, res) => {
     });
   } catch (err) {
     console.error("Unexpected error in /decompose:", err);
+    return res.status(500).json({ error: "Internal server error" });
+  }
+});
+
+// ---------- /add-task endpoint (AI task analysis) ----------
+
+app.post("/add-task", getUserIdFromToken, async (req, res) => {
+  try {
+    const { task_title, project_id, existing_phases, existing_work_packages } = req.body;
+    const userId = req.userId;
+
+    if (!task_title || typeof task_title !== "string" || task_title.trim().length === 0) {
+      return res
+        .status(400)
+        .json({ error: "task_title is required and must be a non empty string" });
+    }
+
+    if (!project_id || typeof project_id !== "string") {
+      return res
+        .status(400)
+        .json({ error: "project_id is required and must be a string" });
+    }
+
+    // Verify project belongs to user
+    const { data: project, error: projectError } = await supabase
+      .from("projects")
+      .select("id, title")
+      .eq("id", project_id)
+      .eq("user_id", userId)
+      .single();
+
+    if (projectError || !project) {
+      return res.status(404).json({ error: "Project not found" });
+    }
+
+    // Get user preferences (defaults for now, can be read from DB later)
+    const userPreferences = {
+      priority_order: ["study", "work", "life"],
+      max_focus_minutes: 50,
+      min_focus_minutes: 25,
+      daily_focus_capacity_minutes: 180,
+      prefer_short_tasks_first: true,
+      preferred_time_of_day: ["morning", "afternoon"],
+      max_deep_tasks_per_day: 3
+    };
+
+    // Baseline profile (rule-based durations)
+    const baselineProfile = {
+      reading: {
+        minutes_per_page_easy: 2,
+        minutes_per_page_medium: 3,
+        minutes_per_page_hard: 5
+      },
+      writing: {
+        minutes_per_200_words_draft: 15,
+        minutes_per_200_words_edit: 10
+      },
+      coding: {
+        small_task_minutes: 45,
+        medium_task_minutes: 90,
+        large_task_minutes: 150,
+        debugging_extra_factor: 1.3
+      },
+      research: {
+        minutes_per_article_scan: 15,
+        minutes_per_article_deep: 35
+      },
+      review: {
+        minutes_per_500_words_review: 10
+      },
+      life_admin: {
+        small_task_minutes: 10,
+        medium_task_minutes: 20,
+        large_task_minutes: 40
+      }
+    };
+
+    // User speed profile – all 1.0 for now (no personalization yet)
+    const userSpeedProfile = {
+      reading_speed_factor: 1.0,
+      writing_speed_factor: 1.0,
+      coding_speed_factor: 1.0,
+      research_speed_factor: 1.0,
+      review_speed_factor: 1.0,
+      life_admin_speed_factor: 1.0
+    };
+
+    const payloadForLlama = {
+      task_title: task_title.trim(),
+      project_title: project.title,
+      user_preferences: userPreferences,
+      baseline_profile: baselineProfile,
+      user_speed_profile: userSpeedProfile,
+      existing_phases: existing_phases || [],
+      existing_work_packages: existing_work_packages || []
+    };
+
+    // Call Ollama chat API with RebootedAddTask model
+    const chatResponse = await fetch(OLLAMA_URL, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        model: "rebooted-add-task",
+        format: "json",
+        messages: [
+          {
+            role: "user",
+            content: JSON.stringify(payloadForLlama)
+          }
+        ],
+        stream: false
+      })
+    });
+
+    if (!chatResponse.ok) {
+      const text = await chatResponse.text();
+      console.error("Ollama error:", text);
+      return res.status(500).json({ error: "Failed to call AI model" });
+    }
+
+    const data = await chatResponse.json();
+    const content = data?.message?.content;
+
+    if (!content) {
+      return res.status(500).json({ error: "Empty response from AI model" });
+    }
+
+    let taskAnalysis;
+    try {
+      taskAnalysis = JSON.parse(content);
+    } catch (err) {
+      console.error("Failed to parse AI JSON:", err, "content:", content);
+      return res
+        .status(500)
+        .json({ error: "AI model returned invalid JSON", raw: content });
+    }
+
+    // Return task analysis to client
+    return res.json({
+      task_title: task_title.trim(),
+      phase_title: taskAnalysis.phase_title,
+      wp_title: taskAnalysis.wp_title,
+      task_type: taskAnalysis.task_type,
+      difficulty: taskAnalysis.difficulty,
+      procrastination_risk: taskAnalysis.procrastination_risk,
+      baseline_estimated_minutes: taskAnalysis.baseline_estimated_minutes,
+      llm_estimated_minutes: taskAnalysis.llm_estimated_minutes,
+      adjusted_estimated_minutes: taskAnalysis.adjusted_estimated_minutes,
+      suggested_sessions: taskAnalysis.suggested_sessions,
+      suggested_time_of_day: taskAnalysis.suggested_time_of_day
+    });
+  } catch (err) {
+    console.error("Unexpected error in /add-task:", err);
     return res.status(500).json({ error: "Internal server error" });
   }
 });
