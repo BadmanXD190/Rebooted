@@ -1,6 +1,0 @@
-{
-  "dependencies": {
-    "@react-native-community/datetimepicker": "^8.5.1",
-    "dayjs": "^1.11.19"
-  }
-}
