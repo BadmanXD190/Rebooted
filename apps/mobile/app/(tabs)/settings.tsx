@@ -17,6 +17,7 @@ import { UserPreferences } from '../../types/database';
 import { theme } from '../../constants/theme';
 import Button from '../../components/Button';
 import Input from '../../components/Input';
+import { updateBlockingStatus } from '../../lib/blocking';
 
 const DAYS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
 
@@ -95,6 +96,33 @@ export default function SettingsScreen() {
       Alert.alert('Error', error.message);
     } else {
       Alert.alert('Success', 'Preferences saved!');
+      // Update blocking status when preferences change
+      await updateBlockingStatus();
+    }
+  }
+
+  async function handleBlockingToggle(value: boolean) {
+    if (!preferences) return;
+    
+    const updated = { ...preferences, android_blocking_enabled: value };
+    setPreferences(updated);
+    
+    // Save immediately
+    const { error } = await supabase
+      .from('user_preferences')
+      .update({
+        android_blocking_enabled: value,
+        updated_at: new Date().toISOString(),
+      })
+      .eq('user_id', preferences.user_id);
+
+    if (error) {
+      Alert.alert('Error', 'Failed to update blocking setting');
+      // Revert on error
+      setPreferences(preferences);
+    } else {
+      // Update blocking status
+      await updateBlockingStatus();
     }
   }
 
@@ -304,13 +332,12 @@ export default function SettingsScreen() {
         <View style={styles.section}>
           <Text style={styles.sectionLabel}>Android Blocking</Text>
           <Text style={styles.hint}>
-            Enable blocking feature (coming soon - will integrate with Accessibility Service)
+            Block entertainment apps when tasks are incomplete or after sleep time
           </Text>
           <View style={styles.switchContainer}>
             <Switch
-              value={false}
-              disabled={true}
-              onValueChange={() => {}}
+              value={preferences?.android_blocking_enabled || false}
+              onValueChange={handleBlockingToggle}
               trackColor={{ false: theme.colors.border, true: theme.colors.primary }}
               thumbColor={theme.colors.white}
             />

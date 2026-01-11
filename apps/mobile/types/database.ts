@@ -9,6 +9,7 @@ export interface UserPreferences {
   sleep_time: string;
   type_priority_order: string[];
   active_days: string[];
+  android_blocking_enabled?: boolean;
   updated_at: string;
 }
 

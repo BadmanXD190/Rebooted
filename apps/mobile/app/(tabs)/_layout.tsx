@@ -121,6 +121,12 @@ export default function TabsLayout() {
           href: null,
         }}
       />
+      <Tabs.Screen
+        name="blocked"
+        options={{
+          href: null,
+        }}
+      />
     </Tabs>
   );
 }

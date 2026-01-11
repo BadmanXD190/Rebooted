@@ -14,6 +14,7 @@ import { ensureTodayAssignments } from '../../lib/dailyAssignments';
 import { DailyTaskAssignmentWithTask, Task } from '../../types/database';
 import { format } from 'date-fns';
 import { theme } from '../../constants/theme';
+import { updateBlockingStatus } from '../../lib/blocking';
 
 export default function HomeScreen() {
   const [assignments, setAssignments] = useState<DailyTaskAssignmentWithTask[]>([]);
@@ -24,6 +25,7 @@ export default function HomeScreen() {
     useCallback(() => {
       loadData();
       ensureTodayAssignments();
+      updateBlockingStatus(); // Update blocking status when screen is focused
     }, [])
   );
 
@@ -71,6 +73,9 @@ export default function HomeScreen() {
       setAssignments(sorted as DailyTaskAssignmentWithTask[]);
     }
     setLoading(false);
+    
+    // Update blocking status after loading data
+    updateBlockingStatus();
   }
 
   function handleTaskPress(task: Task) {
